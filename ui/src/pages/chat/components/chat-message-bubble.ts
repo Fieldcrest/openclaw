@@ -62,6 +62,7 @@ import type { SidebarContent } from "./chat-sidebar.ts";
 import {
   renderExpandedToolCardContent,
   renderRawOutputToggle,
+  renderToolApprovalReviews,
   renderToolCard,
   renderToolOutcome,
   renderToolPreview,
@@ -89,6 +90,8 @@ function renderInlineToolCards(
     canvasPluginSurfaceUrl?: string | null;
     embedSandboxMode?: EmbedSandboxMode;
     allowExternalEmbedUrls?: boolean;
+    showApprovalReviews?: boolean;
+    showApprovalReviews?: boolean;
   },
 ) {
   return html`
@@ -109,6 +112,7 @@ function renderInlineToolCards(
           canvasPluginSurfaceUrl: opts.canvasPluginSurfaceUrl,
           embedSandboxMode: opts.embedSandboxMode ?? "scripts",
           allowExternalEmbedUrls: opts.allowExternalEmbedUrls ?? false,
+          showApprovalReviews: opts.showApprovalReviews,
         });
       })}
     </div>
@@ -579,6 +583,7 @@ export function renderGroupedMessage(
                               canvasPluginSurfaceUrl: opts.canvasPluginSurfaceUrl,
                               embedSandboxMode: opts.embedSandboxMode ?? "scripts",
                               allowExternalEmbedUrls: opts.allowExternalEmbedUrls ?? false,
+                              showApprovalReviews: false,
                             })
                         : nothing}
                       ${failedToolCard
@@ -587,6 +592,7 @@ export function renderGroupedMessage(
                     </div>
                   `
                 : nothing}
+              ${toolCards.map((card) => renderToolApprovalReviews(card))}
             </div>
           `
         : html`
