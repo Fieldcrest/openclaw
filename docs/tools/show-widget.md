@@ -89,7 +89,7 @@ Both implementations use the same required fields:
 
 Discord also accepts optional `button_label` text for the Activity launch button. The Canvas schema intentionally omits this Discord-only field.
 
-The core Canvas tool accepts these optional dashboard placement fields:
+The core `show_widget` tool accepts these optional dashboard placement fields:
 
 - `pin`: also place the widget on the session dashboard.
 - `name`: stable widget name; defaults to a slug of `title`.
@@ -105,7 +105,7 @@ The core result includes a Canvas preview handle, so the Control UI and supporte
 
 ## Show on a device
 
-When a widget presenter plugin is active, `presentation.target` also offers `node_panel`. OpenClaw creates the same hosted widget document, selects a connected macOS Canvas node, and opens its native panel at that document. The tool result names the selected Mac.
+When a widget presenter plugin is active, `presentation.target` also offers `node_panel`. OpenClaw creates the same hosted widget document, selects a connected widget-panel-capable Mac, and opens its native panel at that document. The tool result names the selected Mac.
 
 If no eligible Mac is connected or the node command fails, the widget still appears inline in chat and the result explains how to recover. Pair a Mac running OpenClaw or open the macOS app, then retry. Widgets shown in a native panel are render-only in this first version; widget actions remain disabled there.
 
@@ -155,5 +155,5 @@ Canvas retains at most 32 widgets per session (or per agent when no session is a
 
 - [Control UI hosted embeds](/web/control-ui#hosted-embeds)
 - [Discord Activities](/channels/discord-activities)
-- [Canvas node controls](/plugins/reference/canvas)
+- [macOS widget panel](/platforms/mac/canvas)
 - [Gateway protocol client capabilities](/gateway/protocol#client-capabilities)
