@@ -62,14 +62,12 @@ public struct CanvasPlacement: Codable, Sendable {
 public enum CanvasShowStatus: String, Codable, Sendable {
     /// Panel was shown, but no navigation occurred (no target passed and session already existed).
     case shown
-    /// Target was a direct URL (http(s) or file).
+    /// Target was a hosted or app-local URL.
     case web
     /// Local canvas target resolved to an existing file.
     case ok
     /// Local canvas target did not resolve to a file (404 page).
     case notFound
-    /// Local scaffold fallback (e.g., no index.html present).
-    case welcome
 }
 
 public struct CanvasShowResult: Codable, Sendable {
@@ -98,13 +96,6 @@ public struct CanvasShowResult: Codable, Sendable {
     }
 }
 
-// MARK: - Canvas A2UI
-
-public enum CanvasA2UICommand: String, Codable, Sendable {
-    case pushJSONL
-    case reset
-}
-
 public enum Request: Sendable {
     case notify(
         title: String,
@@ -124,9 +115,6 @@ public enum Request: Sendable {
     case rpcStatus
     case canvasPresent(session: String, path: String?, placement: CanvasPlacement?)
     case canvasHide(session: String)
-    case canvasEval(session: String, javaScript: String)
-    case canvasSnapshot(session: String, outPath: String?)
-    case canvasA2UI(session: String, command: CanvasA2UICommand, jsonl: String?)
     case nodeList
     case nodeDescribe(nodeId: String)
     case nodeInvoke(nodeId: String, command: String, paramsJSON: String?)
@@ -161,12 +149,9 @@ extension Request: Codable {
         case message, thinking, session, deliver, to
         case rpcStatus
         case path
-        case javaScript
         case outPath
         case screenIndex
         case fps
-        case canvasA2UICommand
-        case jsonl
         case facing
         case maxWidth
         case quality
@@ -187,9 +172,6 @@ extension Request: Codable {
         case rpcStatus
         case canvasPresent
         case canvasHide
-        case canvasEval
-        case canvasSnapshot
-        case canvasA2UI
         case nodeList
         case nodeDescribe
         case nodeInvoke
@@ -245,22 +227,6 @@ extension Request: Codable {
         case let .canvasHide(session):
             try container.encode(Kind.canvasHide, forKey: .type)
             try container.encode(session, forKey: .session)
-
-        case let .canvasEval(session, javaScript):
-            try container.encode(Kind.canvasEval, forKey: .type)
-            try container.encode(session, forKey: .session)
-            try container.encode(javaScript, forKey: .javaScript)
-
-        case let .canvasSnapshot(session, outPath):
-            try container.encode(Kind.canvasSnapshot, forKey: .type)
-            try container.encode(session, forKey: .session)
-            try container.encodeIfPresent(outPath, forKey: .outPath)
-
-        case let .canvasA2UI(session, command, jsonl):
-            try container.encode(Kind.canvasA2UI, forKey: .type)
-            try container.encode(session, forKey: .session)
-            try container.encode(command, forKey: .canvasA2UICommand)
-            try container.encodeIfPresent(jsonl, forKey: .jsonl)
 
         case .nodeList:
             try container.encode(Kind.nodeList, forKey: .type)
@@ -347,22 +313,6 @@ extension Request: Codable {
         case .canvasHide:
             let session = try container.decode(String.self, forKey: .session)
             self = .canvasHide(session: session)
-
-        case .canvasEval:
-            let session = try container.decode(String.self, forKey: .session)
-            let javaScript = try container.decode(String.self, forKey: .javaScript)
-            self = .canvasEval(session: session, javaScript: javaScript)
-
-        case .canvasSnapshot:
-            let session = try container.decode(String.self, forKey: .session)
-            let outPath = try container.decodeIfPresent(String.self, forKey: .outPath)
-            self = .canvasSnapshot(session: session, outPath: outPath)
-
-        case .canvasA2UI:
-            let session = try container.decode(String.self, forKey: .session)
-            let command = try container.decode(CanvasA2UICommand.self, forKey: .canvasA2UICommand)
-            let jsonl = try container.decodeIfPresent(String.self, forKey: .jsonl)
-            self = .canvasA2UI(session: session, command: command, jsonl: jsonl)
 
         case .nodeList:
             self = .nodeList
