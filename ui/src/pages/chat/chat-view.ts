@@ -97,6 +97,7 @@ export type ChatProps = ChatTaskSuggestionTrayProps &
     compactionStatus?: CompactionStatus | null;
     fallbackStatus?: FallbackStatus | null;
     progressCard?: ProgressCard | null;
+    onDismissProgressCard?: (card: ProgressCard) => void;
     gatewayQuestionPrompts?: readonly QuestionPrompt[];
     onGatewayQuestionChange?: () => void;
     onGatewayQuestionSubmit?: (
@@ -386,6 +387,7 @@ export function renderChat(props: ChatProps) {
     compactionStatus: props.compactionStatus,
     fallbackStatus: props.fallbackStatus,
     progressCard: props.progressCard,
+    onDismissProgressCard: props.onDismissProgressCard,
     gatewayQuestionPrompts: props.gatewayQuestionPrompts,
     messages: props.messages,
     stream: props.stream,

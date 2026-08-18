@@ -5,6 +5,7 @@ import { cancelQuestionPrompt, submitQuestionPrompt } from "../../app/question-p
 import { readPresenceEntries, resolveCurrentSelfUser } from "../../app/user-profile.ts";
 import { navigateMarkdownSession } from "../../components/markdown-session-links.ts";
 import { t } from "../../i18n/index.ts";
+import { showToast } from "../../lib/toast.ts";
 import {
   resolveControlUiFollowUpMode,
   resolveControlUiServerQueueMode,
@@ -156,6 +157,17 @@ export class ChatPane extends ChatPaneLayoutRender {
       session: selectedSession,
     });
     const gatewaySnapshot = this.context.gateway.snapshot;
+    const canDismissProgressCard =
+      state.connected &&
+      hasOperatorWriteAccess(gatewaySnapshot.hello?.auth ?? null) &&
+      isGatewayMethodAdvertised(gatewaySnapshot, "progressCard.put") === true;
+    const onDismissProgressCard = canDismissProgressCard
+      ? (card: NonNullable<ChatProps["progressCard"]>) => {
+          void this.progressCard
+            .dismiss(card)
+            .catch(() => showToast({ message: t("sessionProgressCard.dismissFailed") }));
+        }
+      : undefined;
     const restartRecoveryTombstoned = selectedSession?.restartRecoveryStatus === "tombstoned";
     const multiIdentity = this.hasMultipleIdentities();
     const suggestionViewer =
@@ -276,6 +288,7 @@ export class ChatPane extends ChatPaneLayoutRender {
       compactionStatus: state.compactionStatus,
       fallbackStatus: state.fallbackStatus,
       progressCard: progressCardInRail ? null : this.progressCard.card,
+      onDismissProgressCard,
       gatewayQuestionPrompts: catalogKey || sessionParticipationBlocked ? [] : this.questionPrompts,
       onGatewayQuestionChange: () => {
         this.questionPrompts = [...this.questionPrompts];
@@ -537,6 +550,7 @@ export class ChatPane extends ChatPaneLayoutRender {
       board,
       sidebarLayout,
       progressCardInRail,
+      onDismissProgressCard,
       sessionWorkspace,
       backgroundTasks,
       chatProps: props,
