@@ -201,9 +201,9 @@ suite.define(() => {
         code: "UNAVAILABLE",
         message: "send outcome unknown",
       });
-      await pollLocatorText(page.locator(".chat-cloud-startup-error")).toContain(
-        "send outcome unknown",
-      );
+      const startupError = page.locator(".chat-cloud-startup-error");
+      await startupError.waitFor();
+      await pollLocatorText(startupError).toContain("send outcome unknown");
       await gateway.setMethodResponse("sessions.send", {
         runId: "run-reload-recovery",
         status: "started",
