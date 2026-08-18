@@ -30,6 +30,7 @@ import {
   resolveUiGlobalAliasAgentId,
 } from "../../lib/sessions/session-key.ts";
 import { draftRouteDataFromLocation, draftSearchFromLocation } from "./route-draft.ts";
+import { loadCatalogShareRouteFromLocation } from "./route-loader-catalog-share.ts";
 import { findCachedShortSession, sessionKeyUuid } from "./route-loader-short-cache.ts";
 import {
   resolveShortSessionReference,
@@ -39,12 +40,7 @@ import {
 const SESSION_REF_SEARCH_LIMIT = 20;
 const SESSION_REF_SEARCH_MAX_PAGES = 5;
 
-type SessionCandidate = {
-  agentId: string;
-  displayName: string;
-  href: string;
-  idPrefix: string;
-};
+type SessionCandidate = { agentId: string; displayName: string; href: string; idPrefix: string };
 
 export type ChatRouteData =
   | {
@@ -65,7 +61,8 @@ export type ChatRouteData =
       candidates: SessionCandidate[];
       truncated: boolean;
       face: BoardFace;
-    };
+    }
+  | { kind: "route-error"; message: string; face: "chat" };
 
 export type SessionChatRouteData = Omit<
   Extract<ChatRouteData, { kind: "session" }>,
@@ -504,6 +501,11 @@ export async function loadChatRoute(
   face: BoardFace,
   signal: AbortSignal,
 ): Promise<ChatRouteData | ReturnType<typeof notFound>> {
+  const catalogShareRoute =
+    face === "chat" && (await loadCatalogShareRouteFromLocation(context, location, signal));
+  if (catalogShareRoute) {
+    return catalogShareRoute;
+  }
   const resolvedTarget = targetFromLocation(context, location);
   if (!resolvedTarget || resolvedTarget.target.namespace !== face) {
     return notFound({ routeId: face });
