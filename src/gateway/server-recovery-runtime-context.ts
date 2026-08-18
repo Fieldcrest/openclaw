@@ -40,7 +40,9 @@ export async function dispatchGatewayLifecycleMethod<T = unknown>(
   options: GatewayLifecycleAgentDispatchOptions = {},
 ): Promise<T> {
   const agentParams = params as AgentRunRequest; // SAFETY: the bound facade validates the payload.
-  const runtime = getGatewayRecoveryRuntime();
+  const runtime = options.resolveGatewayContext
+    ? options.resolveGatewayContext()?.recoveryRuntime
+    : getGatewayRecoveryRuntime();
   if (!runtime) {
     throw new Error(`Gateway instance lifecycle dispatch unavailable for ${method}`);
   }
