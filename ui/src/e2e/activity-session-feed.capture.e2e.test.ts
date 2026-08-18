@@ -22,10 +22,12 @@ suite.define(() => {
         colorScheme: "light",
         locale: "en-US",
         serviceWorkers: "block",
+        timezoneId: "UTC",
         viewport: { height: 900, width: 1280 },
       },
       async ({ page }) => {
-        const now = Date.now();
+        const now = Date.parse("2026-08-18T12:00:00.000Z");
+        await page.clock.setFixedTime(now);
         const releaseKey = "agent:main:release-readiness";
         const designKey = "agent:main:design-review";
         await installMockGateway(page, {
