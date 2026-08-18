@@ -10,11 +10,10 @@ import {
 export { normalizeControlUiBasePath };
 export {
   buildControlUiCatalogSharePath,
-  CONTROL_UI_CATALOG_SHARE_FULL_ID_LENGTH,
-  CONTROL_UI_CATALOG_SHARE_SHORT_ID_LENGTH,
   isControlUiCatalogShareId,
   isControlUiCatalogShareRouteSegment,
   matchControlUiCatalogSharePath,
+  type ControlUiCatalogShareRoute,
   type ControlUiCatalogSharePathMatch,
 } from "./share.js";
 
