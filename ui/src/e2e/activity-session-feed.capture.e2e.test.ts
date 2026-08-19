@@ -25,7 +25,15 @@ suite.define(() => {
         viewport: { height: 900, width: 1280 },
       },
       async ({ page }) => {
-        const now = Date.now();
+        // Previous-day 16:00 UTC keeps the three automation fixtures on one local
+        // calendar day in every time zone while remaining inside the seven-day filter.
+        const current = new Date();
+        const now = Date.UTC(
+          current.getUTCFullYear(),
+          current.getUTCMonth(),
+          current.getUTCDate() - 1,
+          16,
+        );
         const releaseKey = "agent:main:release-readiness";
         const designKey = "agent:main:design-review";
         await installMockGateway(page, {
