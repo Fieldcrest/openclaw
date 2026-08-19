@@ -7,6 +7,7 @@ import { i18n } from "../../../i18n/index.ts";
 import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
 import { extractTextCached } from "../../../lib/chat/message-extract.ts";
 import { normalizeMessage } from "../../../lib/chat/message-normalizer.ts";
+import { soleActiveSessionRunId } from "../../../lib/session-active-run.ts";
 import {
   areUiSessionKeysEquivalent,
   isUiGlobalScopeConfigured,
@@ -208,7 +209,8 @@ export function projectChatTranscript(
   const chatItems = buildCachedChatItems({
     paneId: props.paneId,
     sessionKey: props.sessionKey,
-    runId: props.runId === undefined ? (activeSession?.activeRunIds?.[0] ?? null) : props.runId,
+    runId:
+      props.runId === undefined ? (soleActiveSessionRunId(activeSession) ?? null) : props.runId,
     locale,
     messages: props.messages,
     toolMessages: props.toolMessages,

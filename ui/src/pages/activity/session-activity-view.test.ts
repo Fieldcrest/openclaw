@@ -276,6 +276,10 @@ describe("session activity live status", () => {
               activeRunIds: ["fallback run:a/b"],
               hasActiveRun: true,
             }),
+            row("Ambiguous active runs", owner, now - 1_500, {
+              activeRunIds: ["run-first", "run-second"],
+              hasActiveRun: true,
+            }),
             row("Inactive run", owner, now - 2_000, {
               activeRunIds: ["inactive-run"],
             }),

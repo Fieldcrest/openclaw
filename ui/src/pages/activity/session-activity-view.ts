@@ -13,6 +13,7 @@ import {
   presenceViewerLabel,
   type PresenceViewer,
 } from "../../lib/presence-users.ts";
+import { soleActiveSessionRunId } from "../../lib/session-active-run.ts";
 import { resolveSessionDisplayName } from "../../lib/session-display.ts";
 import {
   resolveSessionPreferredFace,
@@ -251,15 +252,11 @@ function renderSessionLink(context: ApplicationContext, row: GatewaySessionRow) 
   const ownerName = presenceViewerLabel(owner);
   const activityAt = sessionActivityTimestamp(row);
   const headline = row.hasActiveRun === true ? row.observerDigest?.headline.trim() : "";
-  // The observer digest can outlive the run it described (restart/overlap), so its
-  // runId may reference an obsolete audit record; trust it only when it is still an
-  // active run, otherwise fall back to the row's own active-run list.
-  const digestRunId = row.observerDigest?.runId;
+  // An exact sole Gateway identity wins. When the set is unavailable or
+  // ambiguous, only the observer digest can name its own audit record.
   const activeRunId =
     row.hasActiveRun === true
-      ? digestRunId && row.activeRunIds?.includes(digestRunId)
-        ? digestRunId
-        : row.activeRunIds?.[0]
+      ? (soleActiveSessionRunId(row) ?? row.observerDigest?.runId)
       : undefined;
   const scope = row.channel
     ? t("activityFeed.channelLabel", { value: row.channel })

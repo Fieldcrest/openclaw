@@ -2,6 +2,7 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow, SessionRunStatus, SessionsListResult } from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
+import { soleActiveSessionRunId } from "../../lib/session-active-run.ts";
 import { isSessionRunActive } from "../../lib/session-run-state.ts";
 import {
   reconcileSessionRunTerminal,
@@ -519,11 +520,7 @@ function reconcileStaleSelectedSessionRunAfterLocalCompletion(host: RunLifecycle
   }
   // Browser and Gateway clocks can differ. Only an exact active-run identity
   // proves this row still describes the locally completed run.
-  if (
-    recent.runId == null ||
-    row.activeRunIds?.length !== 1 ||
-    row.activeRunIds[0] !== recent.runId
-  ) {
+  if (recent.runId == null || soleActiveSessionRunId(row) !== recent.runId) {
     host.lastLocalTerminalReconcile = null;
     return false;
   }
