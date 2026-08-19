@@ -459,11 +459,7 @@ class GatewayBootstrapAuthTest {
         auth(token = "shared-token"),
       )
       probeStarted.await()
-      val probeJob =
-        runtimeScope.coroutineContext[Job]
-          ?.children
-          ?.singleOrNull { it !in existingJobs }
-          ?: error("Expected one TLS probe job")
+      val probeJob = waitForNewRuntimeChildJob(runtimeScope, existingJobs)
 
       runtime.disconnect()
       probeResult.complete(GatewayTlsProbeResult(fingerprintSha256 = fingerprint))
@@ -1194,6 +1190,22 @@ class GatewayBootstrapAuthTest {
     }
     error("Expected pending gateway trust prompt")
   }
+
+  private suspend fun waitForNewRuntimeChildJob(
+    runtimeScope: CoroutineScope,
+    existingJobs: Set<Job>,
+  ): Job =
+    withTimeout(1_000) {
+      var job: Job? = null
+      while (job == null) {
+        job =
+          runtimeScope.coroutineContext[Job]
+            ?.children
+            ?.singleOrNull { it !in existingJobs }
+        if (job == null) yield()
+      }
+      requireNotNull(job)
+    }
 
   private fun createTestRuntime(app: android.app.Application): NodeRuntime = NodeRuntime(app, testPrefs(app))
 
