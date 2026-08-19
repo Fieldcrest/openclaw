@@ -1939,8 +1939,8 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
         idempotencyKey: "announce-local-dispatch",
       },
       timeoutMs: 120_000,
-      resolveGatewayContext,
     });
+    expect(mockCallArg(dispatchGatewayMethodInProcess, 0, 3)).toBe(resolveGatewayContext);
   });
 
   it("does not dispatch child-derived completion after source lifecycle ownership changes", async () => {
