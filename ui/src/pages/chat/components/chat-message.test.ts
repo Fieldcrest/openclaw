@@ -2291,6 +2291,7 @@ describe("grouped chat rendering", () => {
                 rationale: "Narrowly scoped to the requested file.",
               },
             ],
+            approvalReviewOutcome: "approved",
           },
           timestamp: 1000,
         }),
@@ -2314,6 +2315,37 @@ describe("grouped chat rendering", () => {
     expect(review?.textContent).toContain("Narrowly scoped to the requested file.");
     expect(container.querySelector(".chat-tool-msg-body")).not.toBeNull();
     expect(container.querySelectorAll(".chat-tool-review")).toHaveLength(1);
+  });
+
+  it("renders a persisted denial shield after the denied row leaves bounded review details", () => {
+    const container = document.createElement("div");
+    const group = createToolGroup("bounded-review-group", [
+      createMessageEntry(
+        "bounded-review-message",
+        createToolResultMessage("call-bounded-review", "run_command", "completed", {
+          details: {
+            approvalReviews: [
+              {
+                id: "later-approved-review",
+                label: "Guardian",
+                status: "approved",
+              },
+            ],
+            approvalReviewOutcome: "denied",
+          },
+          timestamp: 1000,
+        }),
+      ),
+    ]);
+
+    renderMessageGroups(container, [group], {
+      isToolMessageExpanded: () => false,
+    });
+
+    expect(
+      container.querySelector('.chat-activity-group__review-status[data-outcome="denied"]'),
+    ).not.toBeNull();
+    expect(container.querySelectorAll(".chat-tool-review")).toHaveLength(0);
   });
 
   it("collapses paired parallel tool cards from one message into an activity group", () => {

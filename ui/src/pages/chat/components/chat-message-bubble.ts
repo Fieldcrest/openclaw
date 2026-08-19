@@ -91,7 +91,6 @@ function renderInlineToolCards(
     embedSandboxMode?: EmbedSandboxMode;
     allowExternalEmbedUrls?: boolean;
     showApprovalReviews?: boolean;
-    showApprovalReviews?: boolean;
   },
 ) {
   return html`
