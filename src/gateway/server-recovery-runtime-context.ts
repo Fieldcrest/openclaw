@@ -3,7 +3,6 @@ import type {
   GatewayRecoveryRuntime,
 } from "./server-instance-runtime.types.js";
 import type { AgentRunRequest } from "./server-methods/agent-request-types.js";
-import type { GatewayContextResolver } from "./server-methods/types.js";
 
 type ActiveGatewayRecoveryRuntime = {
   owner: symbol;
@@ -39,14 +38,9 @@ export async function dispatchGatewayLifecycleMethod<T = unknown>(
   method: "agent",
   params: Record<string, unknown>,
   options: GatewayLifecycleAgentDispatchOptions = {},
-  resolveGatewayContext?: GatewayContextResolver,
 ): Promise<T> {
   const agentParams = params as AgentRunRequest; // SAFETY: the bound facade validates the payload.
-  // Bound lifecycle work must fail closed when its owner has retired instead of
-  // falling through to the process-global replacement Gateway.
-  const runtime = resolveGatewayContext
-    ? resolveGatewayContext()?.recoveryRuntime
-    : getGatewayRecoveryRuntime();
+  const runtime = getGatewayRecoveryRuntime();
   if (!runtime) {
     throw new Error(`Gateway instance lifecycle dispatch unavailable for ${method}`);
   }
