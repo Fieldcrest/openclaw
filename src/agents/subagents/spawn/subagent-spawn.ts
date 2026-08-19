@@ -474,11 +474,9 @@ export async function spawnSubagentDirect(
           await cleanupFailedSpawn();
           return;
         }
-        // The gateway skips its fallback CLI task row because this launch claims
-        // the run's row, and registration is what delivers it. A register failure
-        // means no owner ever recorded the run, so abort the run the gateway
-        // already accepted instead of leaving it executing unrecorded.
-        if (phase === "register" && acceptedChildRunId && taskRowOwnership === "required") {
+        // Registration creates or adopts the canonical task row. Abort an accepted
+        // run when that ownership transfer fails instead of leaving it untracked.
+        if (phase === "register" && acceptedChildRunId) {
           await terminateAcceptedCollectorRun({
             childSessionKey,
             gatewayRunId: acceptedChildRunId,

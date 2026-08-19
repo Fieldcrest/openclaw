@@ -43,6 +43,8 @@ import {
   resetDetachedTaskLifecycleRuntimeForTests,
   setDetachedTaskLifecycleRuntime,
 } from "../../../tasks/detached-task-runtime.test-support.js";
+import { findTaskByRunId } from "../../../tasks/runtime-internal.js";
+import { resetTaskRegistryForTests } from "../../../tasks/task-registry.test-support.js";
 import { captureEnv, setTestEnvValue } from "../../../test-utils/env.js";
 import { createOperationalRunInstanceRef } from "../../admitted-run-context.js";
 import { withGatewayToolCallerIdentity } from "../../tools/gateway-caller-context.js";
@@ -186,6 +188,7 @@ describe("spawnSubagentDirect in-process Gateway collector launch", () => {
       })}\n`,
     );
     clearConfigCache();
+    resetTaskRegistryForTests({ persist: false });
   });
 
   it("leaves shared agent dispatches unmarked unless native spawn claims the task row", async () => {
@@ -215,6 +218,7 @@ describe("spawnSubagentDirect in-process Gateway collector launch", () => {
     resetGatewayWorkAdmission();
     swarmSchedulerTesting.reset();
     resetSubagentRegistryForTests({ persist: false });
+    resetTaskRegistryForTests({ persist: false });
     subagentRegistryTesting.setDepsForTest();
     subagentSpawnTesting.setDepsForTest();
     resetDetachedTaskLifecycleRuntimeForTests();
@@ -750,29 +754,38 @@ describe("spawnSubagentDirect in-process Gateway collector launch", () => {
     },
   );
 
-  it("keeps the Gateway-owned task row on an out-of-process fallback", async () => {
+  it("adopts the Gateway task row on an out-of-process fallback", async () => {
     const gatewayContext = makeGatewayContext();
     const requests: Array<{ method: string; params: Record<string, unknown> }> = [];
-    const createTaskRun = vi.fn(() => {
-      throw new Error("registry task creation must be skipped");
-    });
+    const taskRuntime = getDetachedTaskLifecycleRuntime();
+    let gatewayTaskId: string | undefined;
     subagentSpawnTesting.setDepsForTest({
       hasInProcessGatewayContext: () => false,
       callGateway: async <T>(request: { method: string; params?: unknown }) => {
+        const requestParams = (request.params ?? {}) as Record<string, unknown>;
         requests.push({
           method: request.method,
-          params: (request.params ?? {}) as Record<string, unknown>,
+          params: requestParams,
         });
+        if (request.method === "agent") {
+          const gatewayTask = taskRuntime.createRunningTaskRun({
+            runtime: "cli",
+            sourceId: "gateway-owned-run",
+            ownerKey: requestParams.sessionKey as string,
+            scopeKind: "session",
+            childSessionKey: requestParams.sessionKey as string,
+            runId: "gateway-owned-run",
+            task: requestParams.message as string,
+            deliveryStatus: "not_applicable",
+            startedAt: Date.now(),
+          });
+          gatewayTaskId = gatewayTask?.taskId;
+        }
         return {
           runId: request.method === "agent" ? "gateway-owned-run" : undefined,
           status: "accepted",
         } as T;
       },
-    });
-    setDetachedTaskLifecycleRuntime({
-      ...getDetachedTaskLifecycleRuntime(),
-      createQueuedTaskRun: createTaskRun,
-      createRunningTaskRun: createTaskRun,
     });
 
     const result = await withPluginRuntimeGatewayRequestScope(
@@ -783,14 +796,28 @@ describe("spawnSubagentDirect in-process Gateway collector launch", () => {
       },
       () =>
         spawnSubagentDirect(
-          { task: "use the remote gateway row", context: "isolated", lightContext: true },
+          {
+            task: "use the remote gateway row",
+            label: "Remote row",
+            context: "isolated",
+            lightContext: true,
+          },
           { agentSessionKey: "agent:main:main", requesterRunId: "parent-run" },
         ),
     );
 
     expect(result.status).toBe("accepted");
     expect(result.runId).toBe("gateway-owned-run");
-    expect(createTaskRun).not.toHaveBeenCalled();
+    expect(gatewayTaskId).toBeTypeOf("string");
+    expect(findTaskByRunId("gateway-owned-run")).toMatchObject({
+      taskId: gatewayTaskId,
+      runtime: "subagent",
+      ownerKey: "agent:main:main",
+      childSessionKey: result.childSessionKey,
+      label: "Remote row",
+      task: "use the remote gateway row",
+      deliveryStatus: "pending",
+    });
     expect(subagentRuns.get("gateway-owned-run")).toMatchObject({
       childSessionKey: result.childSessionKey,
     });
@@ -853,7 +880,7 @@ describe("spawnSubagentDirect in-process Gateway collector launch", () => {
     });
   });
 
-  it("does not abort an out-of-process run when registry persistence fails", async () => {
+  it("aborts an out-of-process run when canonical registration fails", async () => {
     const gatewayContext = makeGatewayContext();
     const requests: Array<{ method: string; params: Record<string, unknown> }> = [];
     subagentSpawnTesting.setDepsForTest({
@@ -893,7 +920,7 @@ describe("spawnSubagentDirect in-process Gateway collector launch", () => {
 
     expect(result.status).toBe("error");
     expect(result.error ?? "").toContain("Failed to register subagent run");
-    expect(requests.some((request) => request.method === "chat.abort")).toBe(false);
+    expect(requests.some((request) => request.method === "chat.abort")).toBe(true);
   });
 
   it("launches child runs as a Gateway client that does not own a second task row", async () => {

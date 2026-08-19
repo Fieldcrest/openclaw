@@ -161,6 +161,7 @@ export function createTaskRecord(params: {
   label?: string;
   task: string;
   preferMetadata?: boolean;
+  adoptRuntime?: TaskRuntime;
   status?: TaskStatus;
   deliveryStatus?: TaskDeliveryStatus;
   notifyPolicy?: TaskNotifyPolicy;
@@ -211,9 +212,17 @@ export function createTaskRecord(params: {
     runId: params.runId,
     label: params.label,
     task: params.task,
+    preferMetadata: params.preferMetadata,
+    adoptRuntime: params.adoptRuntime,
   });
   if (existing) {
-    return mergeExistingTaskForCreate(existing, { ...params, agentId });
+    return mergeExistingTaskForCreate(existing, {
+      ...params,
+      requesterSessionKey,
+      ownerKey,
+      scopeKind,
+      agentId,
+    });
   }
   const now = Date.now();
   const taskId = crypto.randomUUID();

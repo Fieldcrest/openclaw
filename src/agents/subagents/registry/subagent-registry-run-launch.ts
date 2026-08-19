@@ -218,56 +218,57 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
       rollbackRegistration();
       throw error;
     }
-    if (registerParams.taskRowOwnership !== "gateway_best_effort") {
-      try {
-        const taskParams = {
-          runtime: "subagent",
-          sourceId: runId,
-          ownerKey: requesterSessionKey,
-          scopeKind: "session",
-          // Detached task runtimes are plugin-replaceable. Isolate their input so
-          // mutation cannot change the already-persisted registry record.
-          requesterOrigin: requesterOrigin ? structuredClone(requesterOrigin) : undefined,
-          childSessionKey,
-          runId,
-          label: registerParams.label,
-          task: registerParams.task,
-          agentId: registerParams.agentId,
-          requesterAgentId: resolveSubagentRequesterAgentId(cfg, registerParams),
-          deliveryStatus:
-            registerParams.expectsCompletionMessage === false ? "not_applicable" : "pending",
-        } as const;
-        const task = queued
-          ? createQueuedTaskRun(taskParams)
-          : createRunningTaskRun({
-              ...taskParams,
-              startedAt: now,
-              lastEventAt: now,
-            });
-        if (!task) {
-          if (registerParams.taskRowOwnership === "required") {
-            throw new Error(`detached task runtime created no task row for run ${runId}`);
-          }
-          log.warn("Failed to persist background task for subagent run", { runId });
+    const requiresTaskRow = registerParams.taskRowOwnership !== undefined;
+    try {
+      const taskParams = {
+        runtime: "subagent",
+        sourceId: runId,
+        ownerKey: requesterSessionKey,
+        scopeKind: "session",
+        // Detached task runtimes are plugin-replaceable. Isolate their input so
+        // mutation cannot change the already-persisted registry record.
+        requesterOrigin: requesterOrigin ? structuredClone(requesterOrigin) : undefined,
+        childSessionKey,
+        runId,
+        label: registerParams.label,
+        task: registerParams.task,
+        agentId: registerParams.agentId,
+        requesterAgentId: resolveSubagentRequesterAgentId(cfg, registerParams),
+        deliveryStatus:
+          registerParams.expectsCompletionMessage === false ? "not_applicable" : "pending",
+        preferMetadata: registerParams.taskRowOwnership === "gateway_best_effort",
+        adoptRuntime: registerParams.taskRowOwnership === "gateway_best_effort" ? "cli" : undefined,
+      } as const;
+      const task = queued
+        ? createQueuedTaskRun(taskParams)
+        : createRunningTaskRun({
+            ...taskParams,
+            startedAt: now,
+            lastEventAt: now,
+          });
+      if (!task) {
+        if (requiresTaskRow) {
+          throw new Error(`detached task runtime created no task row for run ${runId}`);
         }
-      } catch (error) {
-        if (registerParams.taskRowOwnership !== "required") {
-          log.warn("Failed to create background task for subagent run", { runId, error });
-        } else {
-          // Direct dispatch suppressed Gateway's CLI fallback. Persist the rollback before
-          // asking the caller to abort; if that write fails, memory must match durable state.
-          rollbackRegistration();
-          try {
-            this.options.persistOrThrow(...registeredRunIds);
-          } catch (rollbackError) {
-            restoreDurableRegistration();
-            // Durable state still owns this registration. Keep reconciliation active so
-            // caller cleanup can terminalize it instead of leaving a phantom run.
-            activateRegistrationLifecycle();
-            throw rollbackError;
-          }
-          throw error;
+        log.warn("Failed to persist background task for subagent run", { runId });
+      }
+    } catch (error) {
+      if (!requiresTaskRow) {
+        log.warn("Failed to create background task for subagent run", { runId, error });
+      } else {
+        // Direct dispatch suppressed Gateway tracking or this registration is adopting its
+        // fallback row. Persist rollback before asking the caller to abort the accepted run.
+        rollbackRegistration();
+        try {
+          this.options.persistOrThrow(...registeredRunIds);
+        } catch (rollbackError) {
+          restoreDurableRegistration();
+          // Durable state still owns this registration. Keep reconciliation active so
+          // caller cleanup can terminalize it instead of leaving a phantom run.
+          activateRegistrationLifecycle();
+          throw rollbackError;
         }
+        throw error;
       }
     }
     // Wait through Gateway RPC; the in-process lifecycle listener is the embedded fallback.

@@ -32,6 +32,8 @@ export function findExistingTaskForCreate(params: {
   runId?: string;
   label?: string;
   task: string;
+  preferMetadata?: boolean;
+  adoptRuntime?: TaskRuntime;
 }): TaskRecord | undefined {
   const runId = params.runId?.trim();
   const runScopeMatches = runId
@@ -69,6 +71,20 @@ export function findExistingTaskForCreate(params: {
   if (exact) {
     return exact;
   }
+  if (params.adoptRuntime) {
+    const childSessionKey = normalizeOptionalString(params.childSessionKey);
+    const gatewayTask = runId
+      ? getTasksByRunId(runId).find(
+          (task) =>
+            task.runtime === params.adoptRuntime &&
+            task.scopeKind === params.scopeKind &&
+            normalizeOptionalString(task.childSessionKey) === childSessionKey,
+        )
+      : undefined;
+    if (gatewayTask) {
+      return gatewayTask;
+    }
+  }
   if (!runId || params.runtime !== "acp") {
     return undefined;
   }
@@ -81,6 +97,11 @@ export function findExistingTaskForCreate(params: {
 export function mergeExistingTaskForCreate(
   existing: TaskRecord,
   params: {
+    runtime: TaskRuntime;
+    requesterSessionKey: string;
+    ownerKey: string;
+    scopeKind: TaskScopeKind;
+    childSessionKey?: string;
     taskKind?: string;
     requesterOrigin?: TaskDeliveryState["requesterOrigin"];
     sourceId?: string;
@@ -91,6 +112,7 @@ export function mergeExistingTaskForCreate(
     label?: string;
     task: string;
     preferMetadata?: boolean;
+    adoptRuntime?: TaskRuntime;
     deliveryStatus?: TaskDeliveryStatus;
     notifyPolicy?: TaskNotifyPolicy;
     detail?: JsonValue;
@@ -98,6 +120,15 @@ export function mergeExistingTaskForCreate(
 ): TaskRecord | null {
   ensureLinkedTaskFlowRegistryReady(existing);
   const patch: Partial<TaskRecord> = {};
+  if (params.adoptRuntime === existing.runtime) {
+    Object.assign(patch, {
+      runtime: params.runtime,
+      requesterSessionKey: params.requesterSessionKey,
+      ownerKey: params.ownerKey,
+      scopeKind: params.scopeKind,
+      childSessionKey: params.childSessionKey,
+    });
+  }
   const requesterOrigin = normalizeDeliveryContext(params.requesterOrigin);
   const currentDeliveryState = taskDeliveryStates.get(existing.taskId);
   if (requesterOrigin && !currentDeliveryState?.requesterOrigin) {

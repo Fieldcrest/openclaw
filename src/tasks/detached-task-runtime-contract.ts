@@ -33,6 +33,8 @@ export type DetachedTaskCreateParams = {
   label?: string;
   task: string;
   preferMetadata?: boolean;
+  /** Adopt one provisional task from this runtime instead of creating a duplicate row. */
+  adoptRuntime?: TaskRuntime;
   notifyPolicy?: TaskNotifyPolicy;
   deliveryStatus?: TaskDeliveryStatus;
   detail?: JsonValue;
