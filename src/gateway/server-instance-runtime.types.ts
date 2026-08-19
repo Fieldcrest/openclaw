@@ -23,8 +23,6 @@ export type GatewayInstanceAgentDispatchOptions = {
 
 export type GatewayLifecycleAgentDispatchOptions = GatewayInstanceAgentDispatchOptions & {
   timeoutMs?: number;
-  /** Closure-bound routing only; a stale owner must not fall through to a replacement instance. */
-  resolveGatewayContext?: () => { recoveryRuntime?: GatewayRecoveryRuntime } | undefined;
 };
 
 export type GatewayApprovalEventPublisher = {

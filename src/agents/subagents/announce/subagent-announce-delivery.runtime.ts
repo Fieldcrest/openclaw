@@ -12,6 +12,8 @@ import { loadSessionEntryReadOnly as loadSessionEntry } from "../../../config/se
 import { resolvePersistedSessionStoreOwnerForKey } from "../../../config/sessions/session-store-owner.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { callGateway } from "../../../gateway/call.js";
+import type { GatewayLifecycleAgentDispatchOptions } from "../../../gateway/server-instance-runtime.types.js";
+import type { GatewayContextResolver } from "../../../gateway/server-methods/types.js";
 import { resolveExternalBestEffortDeliveryTarget } from "../../../infra/outbound/best-effort-delivery.js";
 import { createBoundDeliveryRouter } from "../../../infra/outbound/bound-delivery-router.js";
 import { resolveConversationIdFromTargets } from "../../../infra/outbound/conversation-id.js";
@@ -253,12 +255,16 @@ export async function queueSubagentAnnounceMessage(
 
 export async function dispatchSubagentAnnounceAgent(
   agentParams: Record<string, unknown>,
-  options: Parameters<typeof dispatchGatewayMethodInProcess>[2],
+  options: GatewayLifecycleAgentDispatchOptions & {
+    resolveGatewayContext?: GatewayContextResolver;
+  },
 ): Promise<unknown> {
+  const { resolveGatewayContext, ...dispatchOptions } = options;
   return await subagentAnnounceDeliveryDeps.dispatchGatewayMethodInProcess(
     "agent",
     agentParams,
-    options,
+    dispatchOptions,
+    resolveGatewayContext,
   );
 }
 
