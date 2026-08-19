@@ -25,7 +25,7 @@ suite.define(() => {
         viewport: { height: 900, width: 1280 },
       },
       async ({ page }) => {
-        const now = Date.now();
+        const now = new Date(2026, 7, 18, 12).getTime();
         const releaseKey = "agent:main:release-readiness";
         const designKey = "agent:main:design-review";
         await installMockGateway(page, {
