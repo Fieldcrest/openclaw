@@ -58,6 +58,7 @@ describe("subagent announce Gateway instance dispatch", () => {
       isDispatchAvailable: () => true,
     });
     closeRuntime = runtime.close;
+    const resolveGatewayContext = () => (runtime.isAvailable() ? context : undefined);
 
     await expect(
       dispatchSubagentAnnounceAgent(
@@ -65,7 +66,7 @@ describe("subagent announce Gateway instance dispatch", () => {
           message: "Process one completed child result.",
           idempotencyKey,
         },
-        { expectFinal: true, forceSyntheticClient: true },
+        { expectFinal: true, forceSyntheticClient: true, resolveGatewayContext },
       ),
     ).resolves.toEqual({ runId: "announce-run", status: "ok", summary: "delivered" });
   });
