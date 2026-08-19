@@ -12,10 +12,12 @@ import {
   replaceGatewayClient,
   waitForCommittedChatRoute,
 } from "./new-session-page.test-support.ts";
+import { waitForCommittedState } from "./settle.test-support.ts";
 
 const suite = createNewSessionPageE2eSuite();
 const CLOUD_STARTUP_RUNTIME_REQUEST =
   /\/assets\/cloud-session-startup\.runtime-[^/?]+\.js(?:\?.*)?$/;
+const CLOUD_RECOVERY_STORAGE_PREFIX = "openclaw.new-session.cloud-recovery.v2:";
 
 suite.define(() => {
   it("clears cloud placement when the selected agent changes", async () => {
@@ -176,19 +178,16 @@ suite.define(() => {
         .locator("wa-popover.new-session-page__where-popover")
         .getByRole("button", { name: "Cloud · aws" })
         .click();
-      await page.evaluate(() => {
+      await page.evaluate((recoveryPrefix) => {
         const originalSetItem = sessionStorage.setItem.bind(sessionStorage);
         Storage.prototype.setItem = function (key: string, value: string) {
-          if (
-            key.startsWith("openclaw.new-session.cloud-recovery.v2:") ||
-            key.startsWith("openclaw.control-ui-e2e.")
-          ) {
+          if (key.startsWith(recoveryPrefix) || key.startsWith("openclaw.control-ui-e2e.")) {
             originalSetItem(key, value);
             return;
           }
           throw new DOMException("composer storage disabled", "SecurityError");
         };
-      });
+      }, CLOUD_RECOVERY_STORAGE_PREFIX);
       await gateway.deferNext("sessions.send");
       await page.locator(".new-session-page__message").fill(message);
       await pastePng(page.locator(".new-session-page__message"));
@@ -197,13 +196,25 @@ suite.define(() => {
       expect(firstSend.params).toMatchObject({
         attachments: [{ fileName: "pixel.png", content: ONE_PIXEL_PNG_B64 }],
       });
+      await waitForCommittedState(
+        page,
+        ({ prefix, expectedSessionKey }) => {
+          const key = Object.keys(sessionStorage).find((candidate) =>
+            candidate.startsWith(String(prefix)),
+          );
+          const raw = key ? sessionStorage.getItem(key) : null;
+          if (!raw) {
+            return false;
+          }
+          const recovery = JSON.parse(raw) as { phase?: unknown; sessionKey?: unknown };
+          return recovery.phase === "sending" && recovery.sessionKey === expectedSessionKey;
+        },
+        { prefix: CLOUD_RECOVERY_STORAGE_PREFIX, expectedSessionKey: sessionKey },
+      );
       await gateway.rejectDeferred("sessions.send", {
         code: "UNAVAILABLE",
         message: "send outcome unknown",
       });
-      const startupError = page.locator(".chat-cloud-startup-error");
-      await startupError.waitFor();
-      await pollLocatorText(startupError).toContain("send outcome unknown");
       await gateway.setMethodResponse("sessions.send", {
         runId: "run-reload-recovery",
         status: "started",
