@@ -70,22 +70,47 @@ export async function startCodexAttemptTurn(
       messages: llmInputEvent.historyMessages,
       systemPrompt: llmInputEvent.systemPrompt,
       accountId: params.agentAccountId ?? undefined,
-      channelId: params.messageChannel ?? params.messageProvider ?? undefined,
+      // The canonical per-conversation identity: derived from the session key
+      // and channel/thread metadata, not just the messaging channel/provider
+      // pair (which two distinct conversations on the same provider share).
+      channelId: hookContext.channelId,
       senderId: params.senderId ?? undefined,
       senderIsOwner: params.senderIsOwner ?? undefined,
     },
     ctx: hookContext,
     hookRunner,
   });
+  // A cancellation that races with the admission call must win outright: do
+  // not act on a pass or a block decision computed for an attempt the caller
+  // already abandoned, and never start a native turn for it.
+  runAbortController.signal.throwIfAborted();
   if (admission.outcome === "block") {
     void emitCodexAppServerEvent(params, {
       stream: "codex_app_server.lifecycle",
       data: { phase: "turn_start_blocked", error: admission.message },
     });
-    const messagesSnapshot = [
-      ...historyState.messages,
-      buildCodexUserPromptMessage({ ...runtimeParams, prompt: turnState.codexTurnPromptText }),
-    ];
+    // Replace the rejected prompt with a redacted placeholder before it ever
+    // reaches the transcript owner, the agent_end hook, or the returned
+    // snapshot. The original prompt text must not escape a blocked attempt.
+    const blockedAt = Date.now();
+    const redactedUserMessage = {
+      role: "user" as const,
+      content: [{ type: "text" as const, text: admission.message }],
+      timestamp: blockedAt,
+      idempotencyKey: `hook-block:before_agent_run:user:${params.runId}`,
+      __openclaw: {
+        beforeAgentRunBlocked: { blockedBy: admission.blockedBy, blockedAt },
+      },
+    };
+    try {
+      await runtimeParams.userTurnTranscriptRecorder?.persistBlocked(redactedUserMessage);
+    } catch (persistError) {
+      embeddedAgentLog.warn(
+        "codex app-server before_agent_run block: failed to persist redacted user message",
+        { error: formatErrorMessage(persistError) },
+      );
+    }
+    const messagesSnapshot = [...historyState.messages, redactedUserMessage];
     await runCodexAgentEndHook(params, {
       event: {
         messages: messagesSnapshot,
@@ -102,6 +127,7 @@ export async function startCodexAttemptTurn(
         message: admission.message,
         messagesSnapshot,
         systemPromptReport,
+        promptErrorSource: "hook:before_agent_run",
       }),
     };
   }

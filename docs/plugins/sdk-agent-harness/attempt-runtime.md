@@ -140,6 +140,48 @@ The capability is optional for compatibility with older hosts; when absent,
 live output-token reporting is unavailable. Keep last-response context
 snapshots and persisted billing usage separate from this live counter.
 
+## Admission gate before native starts
+
+Every harness that owns a native model-start path (turn/start, a native
+session RPC, diagnostics emission, the `llm_input` hook) must call
+`runAgentHarnessBeforeAgentRun(...)` from
+`openclaw/plugin-sdk/agent-harness-runtime` exactly once per attempt, before
+any of those paths run. It resolves `{ outcome: "pass" }` or
+`{ outcome: "block", blockedBy, message }`; a `block` result must become that
+attempt's terminal outcome with zero native or model starts. Retries the
+harness performs internally to recover the _same_ admitted attempt (a
+compact-turn retry, a fresh-thread retry after context-engine overflow) reuse
+that one decision and must not call the helper again; a new attempt, a
+replayed request, or a process restart must call it again.
+
+Compatibility: the helper checks `hasHooks("before_agent_run")` and the
+runner's `runBeforeAgentRun` method independently. No hook registered at all
+resolves `pass` without calling the runner — that is the only case treated as
+compatible pass-through. A hook _is_ registered but the runner has no callable
+`runBeforeAgentRun` (an older or partial hook-runner shape) fails closed
+instead, since a registered policy must never be silently skipped. Hook
+exceptions, timeouts, and malformed decisions all fail closed the same way.
+The helper never logs hook exception text, only fixed, safe metadata, since a
+policy hook's failure detail can carry plugin-local or user-provided content.
+
+Route the event's `channelId` from the harness's own `hookContext.channelId`,
+not from raw `messageChannel`/`messageProvider` params — those are shared by
+every conversation on one channel, while `hookContext.channelId` is the
+per-conversation identity. A denial must replace the rejected prompt with a
+redacted placeholder (through the attempt's `userTurnTranscriptRecorder`,
+where present) before it reaches `agent_end`, a returned message snapshot, or
+persistence; the original prompt text must never appear in any of those. Set
+the resulting terminal's failure source to `"hook:before_agent_run"` so the
+outer harness lifecycle (`src/agents/harness/lifecycle.ts`) settles it as a
+policy block, not a generic prompt error.
+
+A dependency bump to the hook-runner's own package (core, or the plugin that
+supplies it) is a compatibility-relevant change for every harness that calls
+this helper, not just the harness-side package. Treat it the same as any other
+change to a shared core/plugin contract: it needs the project's compatibility
+review, and an already-accepted compatibility manifest does not authorize a
+newer, unreviewed dependency set.
+
 ## Agent-end side effects
 
 Native harnesses must call `runAgentEndSideEffects(...)` from

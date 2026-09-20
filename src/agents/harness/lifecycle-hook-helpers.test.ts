@@ -1,5 +1,14 @@
 // Exercises harness lifecycle hook adapters and finalize-retry budget semantics.
 import { afterEach, describe, expect, it, vi } from "vitest";
+
+const loggerMocks = vi.hoisted(() => ({
+  warn: vi.fn(),
+}));
+
+vi.mock("../../logging/subsystem.js", () => ({
+  createSubsystemLogger: vi.fn(() => loggerMocks),
+}));
+
 import {
   awaitAgentHarnessAgentEndHook,
   runAgentHarnessAgentEndHook,
@@ -31,6 +40,7 @@ const EVENT = {
 describe("agent harness lifecycle hook helpers", () => {
   afterEach(() => {
     Reflect.deleteProperty(globalThis, Symbol.for("openclaw.pluginFinalizeRetryBudget"));
+    loggerMocks.warn.mockClear();
   });
 
   it("ignores legacy hook runners that advertise llm_input without a runner method", () => {
@@ -268,7 +278,7 @@ describe("agent harness lifecycle hook helpers", () => {
   });
 
   it("passes when no before_agent_run gate is registered", async () => {
-    const hookRunner = createLegacyHookRunner();
+    const hookRunner = { hasHooks: vi.fn(() => false) };
 
     await expect(
       runAgentHarnessBeforeAgentRun({
@@ -280,14 +290,25 @@ describe("agent harness lifecycle hook helpers", () => {
     expect(hookRunner.hasHooks).toHaveBeenCalledWith("before_agent_run");
   });
 
-  it("continues when legacy hook runners advertise before_agent_run without a runner method", async () => {
+  it("fails closed when a runner advertises before_agent_run without a callable runner method", async () => {
+    // before_agent_run is a fail-closed gate. A registered hook that the runner
+    // cannot execute must never be treated the same as no hook being registered
+    // at all (unlike the best-effort hooks above), or a real admission policy
+    // would silently never run.
+    const hookRunner = createLegacyHookRunner();
+
     await expect(
       runAgentHarnessBeforeAgentRun({
         event: { prompt: "hello", messages: [] },
         ctx: {},
-        hookRunner: createLegacyHookRunner() as never,
+        hookRunner: hookRunner as never,
       }),
-    ).resolves.toEqual({ outcome: "pass" });
+    ).resolves.toEqual({
+      outcome: "block",
+      blockedBy: "before_agent_run",
+      message: "Your message could not be sent: blocked by before_agent_run",
+    });
+    expect(hookRunner.hasHooks).toHaveBeenCalledWith("before_agent_run");
   });
 
   it("passes an admitted attempt through to the model start path", async () => {
@@ -346,6 +367,31 @@ describe("agent harness lifecycle hook helpers", () => {
       blockedBy: "before_agent_run",
       message: "Your message could not be sent: blocked by before_agent_run",
     });
+  });
+
+  it("never logs hook exception text, even when it carries sensitive detail", async () => {
+    const sensitiveSentinel = "SENTINEL-9f1c-do-not-log-ssn-078-05-1120";
+    const runBeforeAgentRun = vi
+      .fn()
+      .mockRejectedValue(new Error(`policy lookup failed for ${sensitiveSentinel}`));
+    const hookRunner = { hasHooks: () => true, runBeforeAgentRun };
+
+    const outcome = await runAgentHarnessBeforeAgentRun({
+      event: { prompt: "hello", messages: [] },
+      ctx: {},
+      hookRunner: hookRunner as never,
+    });
+
+    expect(outcome).toEqual({
+      outcome: "block",
+      blockedBy: "before_agent_run",
+      message: "Your message could not be sent: blocked by before_agent_run",
+    });
+    expect(JSON.stringify(outcome)).not.toContain(sensitiveSentinel);
+    for (const call of loggerMocks.warn.mock.calls) {
+      expect(JSON.stringify(call)).not.toContain(sensitiveSentinel);
+    }
+    expect(loggerMocks.warn).toHaveBeenCalledWith("before_agent_run hook failed; blocking request");
   });
 
   it("fails closed when the gate hook times out", async () => {
