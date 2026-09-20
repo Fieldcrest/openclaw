@@ -8,11 +8,13 @@ import { createHash } from "node:crypto";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString as normalizeTrimmedString } from "@openclaw/normalization-core/string-coerce";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { resolveBlockMessage } from "../../plugins/hook-decision-types.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import type {
   PluginHookAgentEndEvent,
   PluginHookBeforeAgentFinalizeEvent,
   PluginHookBeforeAgentFinalizeResult,
+  PluginHookBeforeAgentRunEvent,
   PluginHookLlmInputEvent,
   PluginHookLlmOutputEvent,
 } from "../../plugins/hook-types.js";
@@ -80,6 +82,56 @@ export function runAgentHarnessLlmInputHook(params: {
     .catch((error: unknown) => {
       log.warn(`llm_input hook failed: ${String(error)}`);
     });
+}
+
+/** Normalized before_agent_run admission decision for one harness attempt. */
+export type AgentHarnessBeforeAgentRunOutcome =
+  | { outcome: "pass" }
+  | { outcome: "block"; blockedBy: string; message: string };
+
+/**
+ * Runs the fail-closed before_agent_run admission gate for one plugin-owned
+ * harness attempt (e.g. a native Codex turn). Callers must invoke this exactly
+ * once per attempt, before any diagnostics, llm_input, or model/native start,
+ * and must not start a model when the result is undetermined. Hook errors,
+ * timeouts, and malformed decisions all resolve to `block` so the caller fails
+ * closed instead of guessing.
+ */
+export async function runAgentHarnessBeforeAgentRun(params: {
+  event: PluginHookBeforeAgentRunEvent;
+  ctx: AgentHarnessHookContext;
+  hookRunner?: AgentHarnessHookRunner;
+}): Promise<AgentHarnessBeforeAgentRunOutcome> {
+  const hookRunner = params.hookRunner ?? getGlobalHookRunner();
+  if (
+    !hookRunner?.hasHooks("before_agent_run") ||
+    typeof hookRunner.runBeforeAgentRun !== "function"
+  ) {
+    return { outcome: "pass" };
+  }
+  try {
+    const result = await hookRunner.runBeforeAgentRun(
+      params.event,
+      buildAgentHookContext(params.ctx),
+    );
+    const decision = result?.decision;
+    if (decision?.outcome !== "block") {
+      return { outcome: "pass" };
+    }
+    const blockedBy = result?.pluginId ?? "unknown";
+    return { outcome: "block", blockedBy, message: resolveBlockMessage(decision, { blockedBy }) };
+  } catch (error) {
+    log.warn(`before_agent_run hook failed: ${String(error)}`);
+    const blockedBy = "before_agent_run";
+    return {
+      outcome: "block",
+      blockedBy,
+      message: resolveBlockMessage(
+        { outcome: "block", reason: "before_agent_run hook failed" },
+        { blockedBy },
+      ),
+    };
+  }
 }
 
 /** Dispatches best-effort LLM output hooks for a harness attempt. */

@@ -1,6 +1,7 @@
 import {
   embeddedAgentLog,
   formatErrorMessage,
+  runAgentHarnessBeforeAgentRun,
   runAgentHarnessLlmInputHook,
   runAgentHarnessLlmOutputHook,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
@@ -57,13 +58,61 @@ export async function startCodexAttemptTurn(
   const { state, turnIdRef } = turnRuntime;
   const { waitForActiveNativeTurnCompletion } = notifications;
   const { codexModelCallDiagnostics, startCodexTurn, buildLlmInputEvent } = requestRuntime;
+
+  // Admission runs exactly once per attempt, before diagnostics, llm_input, or
+  // any native turn/start call. The compact-turn and fresh-thread recoveries
+  // below retry startCodexTurn() within this same function call; they reuse
+  // this one decision and never re-enter the gate.
+  const llmInputEvent = buildLlmInputEvent();
+  const admission = await runAgentHarnessBeforeAgentRun({
+    event: {
+      prompt: llmInputEvent.prompt,
+      messages: llmInputEvent.historyMessages,
+      systemPrompt: llmInputEvent.systemPrompt,
+      accountId: params.agentAccountId ?? undefined,
+      channelId: params.messageChannel ?? params.messageProvider ?? undefined,
+      senderId: params.senderId ?? undefined,
+      senderIsOwner: params.senderIsOwner ?? undefined,
+    },
+    ctx: hookContext,
+    hookRunner,
+  });
+  if (admission.outcome === "block") {
+    void emitCodexAppServerEvent(params, {
+      stream: "codex_app_server.lifecycle",
+      data: { phase: "turn_start_blocked", error: admission.message },
+    });
+    const messagesSnapshot = [
+      ...historyState.messages,
+      buildCodexUserPromptMessage({ ...runtimeParams, prompt: turnState.codexTurnPromptText }),
+    ];
+    await runCodexAgentEndHook(params, {
+      event: {
+        messages: messagesSnapshot,
+        success: false,
+        error: admission.message,
+        durationMs: Date.now() - attemptStartedAt,
+      },
+      ctx: hookContext,
+      hookRunner,
+    });
+    return {
+      result: buildCodexTurnStartFailureResult({
+        params,
+        message: admission.message,
+        messagesSnapshot,
+        systemPromptReport,
+      }),
+    };
+  }
+
   let started: CodexStartedTurn | undefined;
   // From this point, failure may include an accepted native write. Never return
   // the warm claim idle merely because active-turn setup did not complete.
   resourceState.turnStartAttempted = true;
   try {
     codexModelCallDiagnostics.emitStarted();
-    runAgentHarnessLlmInputHook({ event: buildLlmInputEvent(), ctx: hookContext, hookRunner });
+    runAgentHarnessLlmInputHook({ event: llmInputEvent, ctx: hookContext, hookRunner });
     started = await startCodexTurn();
   } catch (error) {
     let turnStartError = error;

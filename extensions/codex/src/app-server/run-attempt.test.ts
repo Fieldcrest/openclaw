@@ -5162,6 +5162,64 @@ describe("runCodexAppServerAttempt", () => {
     await expectRetainedSuccessfulThread(harness.client, "thread-existing");
   });
 
+  it("admits a compact-turn retry exactly once", async () => {
+    const { sessionFile, workspaceDir } = createRunPaths();
+    await writeExistingBinding(sessionFile, workspaceDir, { dynamicToolsFingerprint: "[]" });
+    const beforeAgentRun = vi.fn(async () => ({ outcome: "pass" as const }));
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([{ hookName: "before_agent_run", handler: beforeAgentRun }]),
+    );
+    let turnStartCalls = 0;
+    const harnessRef: { current?: ReturnType<typeof createAppServerHarness> } = {};
+    const harness = createResumeHarness("thread-existing", async (method) => {
+      if (method === "turn/start") {
+        turnStartCalls += 1;
+        if (turnStartCalls === 1) {
+          queueMicrotask(() => {
+            void harnessRef.current?.notify({
+              method: "turn/completed",
+              params: {
+                threadId: "thread-existing",
+                turnId: "compact-turn",
+                turn: { id: "compact-turn", status: "completed", items: [] },
+              },
+            });
+          });
+          throw new CodexAppServerRpcError(
+            {
+              message: "cannot steer a compact turn",
+              data: {
+                message: "cannot steer a compact turn",
+                codexErrorInfo: {
+                  activeTurnNotSteerable: { turnKind: "compact" },
+                },
+                additionalDetails: null,
+              },
+            },
+            "turn/start",
+          );
+        }
+        return turnStartResult("turn-1");
+      }
+      return undefined;
+    });
+    harnessRef.current = harness;
+    const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir));
+    await vi.waitFor(
+      () =>
+        expect(harness.requests.filter((request) => request.method === "turn/start")).toHaveLength(
+          2,
+        ),
+      fastWait,
+    );
+    // Both native turn/start attempts (the compact-blocked call and its retry)
+    // share the one admission decision made before either call.
+    expect(beforeAgentRun).toHaveBeenCalledTimes(1);
+    await harness.completeTurn({ threadId: "thread-existing", turnId: "turn-1" });
+    await run;
+    expect(beforeAgentRun).toHaveBeenCalledTimes(1);
+  });
+
   it("waits for the exact active native turn before starting a resumed thread turn", async () => {
     const { sessionFile, workspaceDir } = createRunPaths();
     await writeExistingBinding(sessionFile, workspaceDir, { dynamicToolsFingerprint: "[]" });

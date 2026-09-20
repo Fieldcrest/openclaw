@@ -4,6 +4,7 @@ import {
   awaitAgentHarnessAgentEndHook,
   runAgentHarnessAgentEndHook,
   runAgentHarnessBeforeAgentFinalizeHook,
+  runAgentHarnessBeforeAgentRun,
   runAgentHarnessLlmInputHook,
   runAgentHarnessLlmOutputHook,
 } from "./lifecycle-hook-helpers.js";
@@ -264,6 +265,123 @@ describe("agent harness lifecycle hook helpers", () => {
         hookRunner: hookRunner as never,
       }),
     ).resolves.toEqual({ action: "continue" });
+  });
+
+  it("passes when no before_agent_run gate is registered", async () => {
+    const hookRunner = createLegacyHookRunner();
+
+    await expect(
+      runAgentHarnessBeforeAgentRun({
+        event: { prompt: "hello", messages: [] },
+        ctx: {},
+        hookRunner: hookRunner as never,
+      }),
+    ).resolves.toEqual({ outcome: "pass" });
+    expect(hookRunner.hasHooks).toHaveBeenCalledWith("before_agent_run");
+  });
+
+  it("continues when legacy hook runners advertise before_agent_run without a runner method", async () => {
+    await expect(
+      runAgentHarnessBeforeAgentRun({
+        event: { prompt: "hello", messages: [] },
+        ctx: {},
+        hookRunner: createLegacyHookRunner() as never,
+      }),
+    ).resolves.toEqual({ outcome: "pass" });
+  });
+
+  it("passes an admitted attempt through to the model start path", async () => {
+    const runBeforeAgentRun = vi.fn().mockResolvedValue({
+      decision: { outcome: "pass" },
+      pluginId: "policy",
+    });
+    const hookRunner = { hasHooks: () => true, runBeforeAgentRun };
+
+    await expect(
+      runAgentHarnessBeforeAgentRun({
+        event: { prompt: "hello", messages: [] },
+        ctx: { runId: "run-1", sessionKey: "agent:main:session-1" },
+        hookRunner: hookRunner as never,
+      }),
+    ).resolves.toEqual({ outcome: "pass" });
+    expect(runBeforeAgentRun).toHaveBeenCalledTimes(1);
+    expect(runBeforeAgentRun).toHaveBeenCalledWith(
+      { prompt: "hello", messages: [] },
+      expect.objectContaining({ runId: "run-1", sessionKey: "agent:main:session-1" }),
+    );
+  });
+
+  it("blocks and reports the denying plugin when the gate returns a block decision", async () => {
+    const runBeforeAgentRun = vi.fn().mockResolvedValue({
+      decision: { outcome: "block", reason: "unsafe input", message: "Request blocked." },
+      pluginId: "policy",
+    });
+    const hookRunner = { hasHooks: () => true, runBeforeAgentRun };
+
+    await expect(
+      runAgentHarnessBeforeAgentRun({
+        event: { prompt: "hello", messages: [] },
+        ctx: {},
+        hookRunner: hookRunner as never,
+      }),
+    ).resolves.toEqual({
+      outcome: "block",
+      blockedBy: "policy",
+      message: "Your message could not be sent: Request blocked. (blocked by policy)",
+    });
+  });
+
+  it("fails closed when the gate hook throws", async () => {
+    const runBeforeAgentRun = vi.fn().mockRejectedValue(new Error("policy unavailable"));
+    const hookRunner = { hasHooks: () => true, runBeforeAgentRun };
+
+    await expect(
+      runAgentHarnessBeforeAgentRun({
+        event: { prompt: "hello", messages: [] },
+        ctx: {},
+        hookRunner: hookRunner as never,
+      }),
+    ).resolves.toEqual({
+      outcome: "block",
+      blockedBy: "before_agent_run",
+      message: "Your message could not be sent: blocked by before_agent_run",
+    });
+  });
+
+  it("fails closed when the gate hook times out", async () => {
+    const runBeforeAgentRun = vi.fn().mockRejectedValue(new Error("hook timed out after 15000ms"));
+    const hookRunner = { hasHooks: () => true, runBeforeAgentRun };
+
+    await expect(
+      runAgentHarnessBeforeAgentRun({
+        event: { prompt: "hello", messages: [] },
+        ctx: {},
+        hookRunner: hookRunner as never,
+      }),
+    ).resolves.toMatchObject({ outcome: "block", blockedBy: "before_agent_run" });
+  });
+
+  it("fails closed when the gate returns a malformed decision", async () => {
+    // The core hook runner already normalizes undefined/invalid decisions to a
+    // block outcome (fail-closed policy for before_agent_run); this proves the
+    // harness helper does not second-guess that normalized result.
+    const runBeforeAgentRun = vi.fn().mockResolvedValue({
+      decision: { outcome: "block", reason: "before_agent_run returned an invalid decision" },
+      pluginId: "unknown",
+    });
+    const hookRunner = { hasHooks: () => true, runBeforeAgentRun };
+
+    await expect(
+      runAgentHarnessBeforeAgentRun({
+        event: { prompt: "hello", messages: [] },
+        ctx: {},
+        hookRunner: hookRunner as never,
+      }),
+    ).resolves.toEqual({
+      outcome: "block",
+      blockedBy: "unknown",
+      message: "Your message could not be sent: blocked by unknown",
+    });
   });
 
   it("does not collide fallback retry keys for long instructions with shared prefixes", async () => {
