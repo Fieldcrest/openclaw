@@ -1,6 +1,7 @@
 // Codex tests cover the before_agent_run admission gate in startCodexAttemptTurn.
 import path from "node:path";
 import type { EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { openFileBackedSessionManagerForTest } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
 import {
   onInternalDiagnosticEvent,
   type DiagnosticEventPayload,
@@ -11,6 +12,7 @@ import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtim
 import { describe, expect, it, vi } from "vitest";
 import { readAttemptTerminal } from "./attempt-terminal.test-helper.js";
 import {
+  assistantMessage,
   createParams,
   createStartedThreadHarness,
   fastWait,
@@ -175,6 +177,85 @@ describe("runCodexAppServerAttempt before_agent_run admission", () => {
     expect(firstEvent.channelId).toBe("chat-alpha");
     expect(secondEvent.channelId).toBe("chat-beta");
     expect(firstEvent.channelId).not.toBe(secondEvent.channelId);
+  });
+
+  it("supplies the admission gate an isolated snapshot of the loaded session history, enabling history-dependent decisions", async () => {
+    // The gate's `messages` field must carry the attempt's actual loaded
+    // session history (readMirroredSessionHistoryMessages via historyState),
+    // not the Codex llm_input event's historyMessages field, which is
+    // deliberately empty for native Codex turns (see run-attempt.hooks.test.ts).
+    // A policy that only ever sees an empty history array can never make a
+    // history-dependent decision.
+    const restrictedTopicMarker = "PRIOR-TURN-RESTRICTED-TOPIC-91a2";
+    const beforeAgentRun = vi.fn(async (...args: unknown[]) => {
+      const event = args[0] as { messages?: unknown[] };
+      const historyContainsRestrictedTopic = (event.messages ?? []).some((message) =>
+        JSON.stringify(message).includes(restrictedTopicMarker),
+      );
+      return historyContainsRestrictedTopic
+        ? {
+            outcome: "block" as const,
+            reason: "restricted topic in history",
+            message: "Request blocked.",
+          }
+        : { outcome: "pass" as const };
+    });
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([{ hookName: "before_agent_run", handler: beforeAgentRun }]),
+    );
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const sessionManager = openFileBackedSessionManagerForTest(sessionFile, {
+      sessionId: "session-1",
+    });
+    sessionManager.appendMessage(assistantMessage(restrictedTopicMarker, Date.now()));
+    const harness = createStartedThreadHarness();
+
+    const result = await runCodexAppServerAttempt(createParams(sessionFile, workspaceDir));
+
+    expect(beforeAgentRun).toHaveBeenCalledTimes(1);
+    const [event] = beforeAgentRun.mock.calls[0] as [{ messages?: unknown[] }];
+    expect(event.messages?.length).toBeGreaterThan(0);
+    expect(JSON.stringify(event.messages)).toContain(restrictedTopicMarker);
+    expect(harness.requests.some((request) => request.method === "turn/start")).toBe(false);
+    expect(readAttemptTerminal(result).promptErrorSource).toBe("hook:before_agent_run");
+  });
+
+  it("admits an attempt whose loaded history does not trip a history-dependent policy", async () => {
+    const restrictedTopicMarker = "PRIOR-TURN-RESTRICTED-TOPIC-91a2";
+    const beforeAgentRun = vi.fn(async (...args: unknown[]) => {
+      const event = args[0] as { messages?: unknown[] };
+      const historyContainsRestrictedTopic = (event.messages ?? []).some((message) =>
+        JSON.stringify(message).includes(restrictedTopicMarker),
+      );
+      return historyContainsRestrictedTopic
+        ? {
+            outcome: "block" as const,
+            reason: "restricted topic in history",
+            message: "Request blocked.",
+          }
+        : { outcome: "pass" as const };
+    });
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([{ hookName: "before_agent_run", handler: beforeAgentRun }]),
+    );
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const sessionManager = openFileBackedSessionManagerForTest(sessionFile, {
+      sessionId: "session-1",
+    });
+    sessionManager.appendMessage(assistantMessage("unrelated prior turn", Date.now()));
+    const harness = createStartedThreadHarness();
+
+    const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir));
+    await harness.waitForMethod("turn/start");
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    const result = await run;
+
+    expect(readAttemptTerminal(result).promptError).toBeNull();
+    const [event] = beforeAgentRun.mock.calls[0] as [{ messages?: unknown[] }];
+    expect(JSON.stringify(event.messages)).not.toContain(restrictedTopicMarker);
+    expect(harness.requests.filter((request) => request.method === "turn/start")).toHaveLength(1);
   });
 
   it("fails closed with zero native starts when the admission hook throws", async () => {

@@ -164,6 +164,14 @@ exceptions, timeouts, and malformed decisions all fail closed the same way.
 The helper never logs hook exception text, only fixed, safe metadata, since a
 policy hook's failure detail can carry plugin-local or user-provided content.
 
+Pass the event's `messages` field an isolated snapshot of the attempt's
+actual loaded session history (a copy, not a live reference the hook could
+mutate), not a harness's own lifecycle-hook history field if that field is
+scoped differently — Codex's `llm_input` event's `historyMessages` is
+deliberately empty for native turns (native app-server already holds that
+history), but a `before_agent_run` policy still needs real prior-turn
+content to make a history-dependent decision.
+
 Route the event's `channelId` from the harness's own `hookContext.channelId`,
 not from raw `messageChannel`/`messageProvider` params — those are shared by
 every conversation on one channel, while `hookContext.channelId` is the

@@ -67,7 +67,13 @@ export async function startCodexAttemptTurn(
   const admission = await runAgentHarnessBeforeAgentRun({
     event: {
       prompt: llmInputEvent.prompt,
-      messages: llmInputEvent.historyMessages,
+      // An isolated snapshot of the loaded session history, not the
+      // llm_input event's historyMessages field: Codex's llm_input payload
+      // intentionally omits history that native app-server already holds
+      // (see run-attempt.hooks.test.ts), while a before_agent_run policy
+      // needs the actual loaded history to make history-dependent decisions.
+      // Copy the array so a hook cannot mutate the attempt's shared state.
+      messages: [...historyState.messages],
       systemPrompt: llmInputEvent.systemPrompt,
       accountId: params.agentAccountId ?? undefined,
       // The canonical per-conversation identity: derived from the session key
