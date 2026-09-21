@@ -142,17 +142,29 @@ snapshots and persisted billing usage separate from this live counter.
 
 ## Admission gate before native starts
 
-Every harness that owns a native model-start path (turn/start, a native
-session RPC, diagnostics emission, the `llm_input` hook) must call
-`runAgentHarnessBeforeAgentRun(...)` from
-`openclaw/plugin-sdk/agent-harness-runtime` exactly once per attempt, before
-any of those paths run. It resolves `{ outcome: "pass" }` or
+A harness that owns a native model-submission path (diagnostics emission, the
+`llm_input` hook, `turn/start`) calls `runAgentHarnessBeforeAgentRun(...)`
+from `openclaw/plugin-sdk/agent-harness-runtime` exactly once per attempt,
+before any of those model-submission paths run. This boundary is after the
+harness's own native runtime/thread setup, not before it: Codex, for example,
+calls `startCodexAttemptRuntime` (native thread start/resume and its RPCs)
+before reaching this gate, so the gate protects model submission, not native
+session establishment. It resolves `{ outcome: "pass" }` or
 `{ outcome: "block", blockedBy, message }`; a `block` result must become that
 attempt's terminal outcome with zero native or model starts. Retries the
 harness performs internally to recover the _same_ admitted attempt (a
 compact-turn retry, a fresh-thread retry after context-engine overflow) reuse
 that one decision and must not call the helper again; a new attempt, a
 replayed request, or a process restart must call it again.
+
+Support differs by harness: the embedded and CLI runners implement this gate
+across their native model-start paths; Codex implements it at the
+model-submission boundary described above. Other harnesses have not adopted
+this helper. See the "Input policy gate" row of
+[the Codex v1 support contract](/plugins/codex-harness-runtime/v1-support-contract)
+for the Codex-specific guarantee, and treat this section as the shared
+contract those harnesses implement, not a promise that every harness or every
+native call already honors it.
 
 Compatibility: the helper checks `hasHooks("before_agent_run")` and the
 runner's `runBeforeAgentRun` method independently. No hook registered at all

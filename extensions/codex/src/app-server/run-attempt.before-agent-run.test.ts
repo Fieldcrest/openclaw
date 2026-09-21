@@ -1,6 +1,9 @@
 // Codex tests cover the before_agent_run admission gate in startCodexAttemptTurn.
 import path from "node:path";
-import type { EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
+import type {
+  EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
+  HarnessContextEngine as ContextEngine,
+} from "openclaw/plugin-sdk/agent-harness-runtime";
 import { openFileBackedSessionManagerForTest } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
 import {
   onInternalDiagnosticEvent,
@@ -9,18 +12,44 @@ import {
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { initializeGlobalHookRunner } from "openclaw/plugin-sdk/hook-runtime";
 import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, vi } from "vitest";
 import { readAttemptTerminal } from "./attempt-terminal.test-helper.js";
+import { CodexAppServerRpcError } from "./client.js";
 import {
   assistantMessage,
   createParams,
+  createResumeHarness,
   createStartedThreadHarness,
   fastWait,
   mockCall,
   runCodexAppServerAttempt,
   setupRunAttemptTestHooks,
   tempDir,
+  threadStartResult,
+  turnStartResult,
+  userMessage,
 } from "./run-attempt-test-harness.js";
+import { createContextEngine } from "./run-attempt.context-engine.test-support.js";
+import { writeCodexAppServerBinding } from "./session-binding.test-helpers.js";
+
+const DISABLED_CODEX_WEB_SEARCH_THREAD_CONFIG_FINGERPRINT = JSON.stringify({
+  "features.standalone_web_search": false,
+  web_search: "disabled",
+});
+const requireRecord = createRequireRecord("record", "expected-label-object");
+
+async function writeExistingCompactTurnBinding(sessionFile: string, workspaceDir: string) {
+  await writeCodexAppServerBinding(sessionFile, {
+    threadId: "thread-existing",
+    cwd: workspaceDir,
+    model: "gpt-5.4-codex",
+    modelProvider: "openai",
+    historyCoveredThrough: new Date().toISOString(),
+    webSearchThreadConfigFingerprint: DISABLED_CODEX_WEB_SEARCH_THREAD_CONFIG_FINGERPRINT,
+    dynamicToolsFingerprint: "[]",
+  });
+}
 
 setupRunAttemptTestHooks();
 
@@ -137,6 +166,62 @@ describe("runCodexAppServerAttempt before_agent_run admission", () => {
     expect(
       JSON.stringify((result as { messagesSnapshot?: unknown[] }).messagesSnapshot),
     ).not.toContain(sensitiveSentinel);
+  });
+
+  it("keeps the loaded history's nested content unchanged when a hook mutates its snapshot, including on denial", async () => {
+    // The gate must hand hooks an isolated copy of each message, not shared
+    // nested objects: a hook that edits a prior message's content must not
+    // alter the attempt's own history, which agent_end and the returned
+    // snapshot subsequently expose, even when the attempt is denied.
+    const originalMarker = "ORIGINAL-PRE-MUTATION-CONTENT-7f3d";
+    const mutatedMarker = "MUTATED-BY-HOOK-CONTENT-91c8";
+    const beforeAgentRun = vi.fn(async (...args: unknown[]) => {
+      const event = args[0] as { messages?: Array<{ content?: Array<{ text?: string }> }> };
+      const [firstMessage] = event.messages ?? [];
+      if (firstMessage?.content?.[0]) {
+        firstMessage.content[0].text = mutatedMarker;
+      }
+      return {
+        outcome: "block" as const,
+        reason: "test probe",
+        message: "Request blocked.",
+      };
+    });
+    const agentEnd = vi.fn();
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([
+        { hookName: "before_agent_run", handler: beforeAgentRun, pluginId: "policy" },
+        { hookName: "agent_end", handler: agentEnd },
+      ]),
+    );
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const sessionManager = openFileBackedSessionManagerForTest(sessionFile, {
+      sessionId: "session-1",
+    });
+    sessionManager.appendMessage(assistantMessage(originalMarker, Date.now()));
+    createStartedThreadHarness();
+
+    const result = await runCodexAppServerAttempt(createParams(sessionFile, workspaceDir));
+
+    expect(beforeAgentRun).toHaveBeenCalledTimes(1);
+    // The hook did mutate the snapshot it was handed...
+    const [event] = beforeAgentRun.mock.calls[0] as [{ messages?: unknown[] }];
+    expect(JSON.stringify(event.messages)).toContain(mutatedMarker);
+    // ...but the attempt's own loaded history must still carry the original
+    // content wherever it is subsequently exposed.
+    const [agentEndPayload] = mockCall(agentEnd, "agent_end") as [
+      { messages?: unknown[] },
+      unknown,
+    ];
+    expect(JSON.stringify(agentEndPayload.messages)).toContain(originalMarker);
+    expect(JSON.stringify(agentEndPayload.messages)).not.toContain(mutatedMarker);
+    expect(JSON.stringify((result as { messagesSnapshot?: unknown[] }).messagesSnapshot)).toContain(
+      originalMarker,
+    );
+    expect(
+      JSON.stringify((result as { messagesSnapshot?: unknown[] }).messagesSnapshot),
+    ).not.toContain(mutatedMarker);
   });
 
   it("derives the admission channel identity from the canonical per-conversation hook context", async () => {
@@ -350,5 +435,168 @@ describe("runCodexAppServerAttempt before_agent_run admission", () => {
     const rejection = await run.catch((error: unknown) => error);
     expect(harness.requests.some((request) => request.method === "turn/start")).toBe(false);
     expect(rejection).toBe(abortReason);
+  });
+});
+
+describe("runCodexAppServerAttempt before_agent_run admission reuse across native retries", () => {
+  it("admits a compact-turn retry exactly once", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    await writeExistingCompactTurnBinding(sessionFile, workspaceDir);
+    const beforeAgentRun = vi.fn(async () => ({ outcome: "pass" as const }));
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([{ hookName: "before_agent_run", handler: beforeAgentRun }]),
+    );
+    let turnStartCalls = 0;
+    const harnessRef: { current?: ReturnType<typeof createResumeHarness> } = {};
+    const harness = createResumeHarness("thread-existing", async (method) => {
+      if (method === "turn/start") {
+        turnStartCalls += 1;
+        if (turnStartCalls === 1) {
+          queueMicrotask(() => {
+            void harnessRef.current?.notify({
+              method: "turn/completed",
+              params: {
+                threadId: "thread-existing",
+                turnId: "compact-turn",
+                turn: { id: "compact-turn", status: "completed", items: [] },
+              },
+            });
+          });
+          throw new CodexAppServerRpcError(
+            {
+              message: "cannot steer a compact turn",
+              data: {
+                message: "cannot steer a compact turn",
+                codexErrorInfo: {
+                  activeTurnNotSteerable: { turnKind: "compact" },
+                },
+                additionalDetails: null,
+              },
+            },
+            "turn/start",
+          );
+        }
+        return turnStartResult("turn-1");
+      }
+      return undefined;
+    });
+    harnessRef.current = harness;
+    const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir));
+    await vi.waitFor(
+      () =>
+        expect(harness.requests.filter((request) => request.method === "turn/start")).toHaveLength(
+          2,
+        ),
+      fastWait,
+    );
+    // Both native turn/start attempts (the compact-blocked call and its retry)
+    // share the one admission decision made before either call.
+    expect(beforeAgentRun).toHaveBeenCalledTimes(1);
+    await harness.completeTurn({ threadId: "thread-existing", turnId: "turn-1" });
+    await run;
+    expect(beforeAgentRun).toHaveBeenCalledTimes(1);
+  });
+
+  it("admits a fresh-thread context-engine overflow retry exactly once", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    openFileBackedSessionManagerForTest(sessionFile, { sessionId: "session-1" }).appendMessage(
+      assistantMessage("pre-compaction context", Date.now()) as never,
+    );
+    await writeCodexAppServerBinding(sessionFile, {
+      threadId: "thread-old",
+      cwd: workspaceDir,
+      dynamicToolsFingerprint: "[]",
+      webSearchThreadConfigFingerprint: DISABLED_CODEX_WEB_SEARCH_THREAD_CONFIG_FINGERPRINT,
+      contextEngine: {
+        schemaVersion: 1,
+        engineId: "lossless-claw",
+        policyFingerprint:
+          '{"schemaVersion":1,"engineId":"lossless-claw","ownsCompaction":true,"contextTokenBudget":400000,"projectionMaxChars":1000000}',
+        projection: {
+          schemaVersion: 1,
+          mode: "thread_bootstrap",
+          epoch: "epoch-before",
+        },
+      },
+    });
+    const beforeAgentRun = vi.fn(async () => ({ outcome: "pass" as const }));
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([{ hookName: "before_agent_run", handler: beforeAgentRun }]),
+    );
+    const assemble = vi.fn(
+      async ({ messages, prompt }: Parameters<ContextEngine["assemble"]>[0]) => ({
+        messages: [
+          ...messages,
+          assistantMessage("context epoch-before", 10),
+          userMessage(prompt ?? "", 11),
+        ],
+        estimatedTokens: 42,
+        systemPromptAddition: "context-engine system",
+        contextProjection: { mode: "thread_bootstrap" as const, epoch: "epoch-before" },
+      }),
+    );
+    const contextEngine = createContextEngine({ assemble });
+    const freshTurnStarted = createDeferred<void>();
+    const harness = createStartedThreadHarness(
+      async (method, requestParams) => {
+        if (method === "thread/resume") {
+          return threadStartResult("thread-old");
+        }
+        if (method === "thread/start") {
+          return threadStartResult("thread-fresh");
+        }
+        if (method === "turn/start") {
+          const request = requireRecord(requestParams, `${method} params`);
+          if (request.threadId === "thread-old") {
+            throw new Error("Codex ran out of room in the model's context window");
+          }
+          if (request.threadId === "thread-fresh") {
+            freshTurnStarted.resolve();
+            return turnStartResult("turn-fresh");
+          }
+        }
+        return undefined;
+      },
+      { persistedThreads: ["thread-old"] },
+    );
+    const params = createParams(sessionFile, workspaceDir);
+    params.contextEngine = contextEngine;
+    params.contextTokenBudget = 400_000;
+
+    const run = runCodexAppServerAttempt(params);
+    try {
+      await Promise.race([
+        freshTurnStarted.promise,
+        run.then((result) => {
+          throw new Error("Codex attempt settled before fresh turn/start", {
+            cause: readAttemptTerminal(result),
+          });
+        }),
+      ]);
+      // Two native turn/start attempts (stale thread, then fresh thread) share
+      // the one admission decision made before either call.
+      expect(harness.requests.filter((request) => request.method === "turn/start")).toHaveLength(2);
+      expect(beforeAgentRun).toHaveBeenCalledTimes(1);
+      await harness.notify({
+        method: "turn/completed",
+        params: {
+          threadId: "thread-fresh",
+          turnId: "turn-fresh",
+          turn: {
+            id: "turn-fresh",
+            status: "completed",
+            items: [{ type: "agentMessage", id: "msg-1", text: "fresh answer" }],
+          },
+        },
+      });
+      const result = await run;
+      expect(result.assistantTexts).toContain("fresh answer");
+      expect(beforeAgentRun).toHaveBeenCalledTimes(1);
+    } finally {
+      await harness.client.closeAndWait();
+      await run.catch(() => undefined);
+    }
   });
 });

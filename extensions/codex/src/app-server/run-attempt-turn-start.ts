@@ -64,6 +64,11 @@ export async function startCodexAttemptTurn(
   // below retry startCodexTurn() within this same function call; they reuse
   // this one decision and never re-enter the gate.
   const llmInputEvent = buildLlmInputEvent();
+  // Only pay for the history snapshot (and its deep clone) when a policy is
+  // actually registered to see it; runAgentHarnessBeforeAgentRun resolves
+  // "pass" without inspecting the event otherwise, but its argument is built
+  // eagerly by this caller regardless.
+  const hasBeforeAgentRunHook = hookRunner?.hasHooks("before_agent_run") ?? false;
   const admission = await runAgentHarnessBeforeAgentRun({
     event: {
       prompt: llmInputEvent.prompt,
@@ -72,8 +77,12 @@ export async function startCodexAttemptTurn(
       // intentionally omits history that native app-server already holds
       // (see run-attempt.hooks.test.ts), while a before_agent_run policy
       // needs the actual loaded history to make history-dependent decisions.
-      // Copy the array so a hook cannot mutate the attempt's shared state.
-      messages: [...historyState.messages],
+      // Deep-clone each message so a hook cannot mutate the attempt's shared
+      // state through nested content objects, matching the canonical
+      // embedded-runner isolation (runEmbeddedAttemptBeforeAgentRun).
+      messages: hasBeforeAgentRunHook
+        ? historyState.messages.map((message) => structuredClone(message))
+        : [],
       systemPrompt: llmInputEvent.systemPrompt,
       accountId: params.agentAccountId ?? undefined,
       // The canonical per-conversation identity: derived from the session key
